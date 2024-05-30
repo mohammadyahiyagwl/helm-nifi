@@ -25,7 +25,7 @@ auth:
     enabled: true
     discoveryUrl: http://keycloak.default.svc.cluster.local:8080/auth/realms/nifi/.well-known/openid-configuration
     clientId: nifi
-    clientSecret: CZhA1IOePlXHz3PWqVwYoVAcYIUHTcDK
+    clientSecret: CZhA1IOePlXHz3PWqVwYoVAcYIUHTcDK_secret
     admin: nifi@example.com
     claimIdentifyingUser: email
 

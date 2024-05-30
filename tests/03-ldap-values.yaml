@@ -10,5 +10,5 @@ auth:
     host: ldap://openldap:389
     searchBase: ou=users,dc=example,dc=org
     admin: cn=user1,ou=users,dc=example,dc=org
-    pass: password1
+    pass: password1_secret
     authStrategy: SIMPLE

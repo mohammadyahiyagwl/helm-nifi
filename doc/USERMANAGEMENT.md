@@ -11,7 +11,7 @@ The Single User authentication is the default authentication in this helm chart.
 ```
 singleUser:
     username: username
-    password: changemechangeme
+    password: changemechangeme_secret
 ```
 
 ## 2. Client Certificate

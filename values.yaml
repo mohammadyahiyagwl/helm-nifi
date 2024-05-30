@@ -5,16 +5,17 @@ replicaCount: 1
 ## Set default image, imageTag, and imagePullPolicy.
 ## ref: https://hub.docker.com/r/apache/nifi/
 ##
+
 image:
   repository: apache/nifi
-  tag: "1.23.2"
+  tag: "2.0.0-M2"
   pullPolicy: "IfNotPresent"
 
   ## Optionally specify an imagePullSecret.
   ## Secret must be manually created in the namespace.
   ## ref: https://kubernetes.io/docs/tasks/configure-pod-container/pull-image-private-registry/
   ##
-  # pullSecret: myRegistrKeySecretName
+  # pullSecret: myRegistrKeySecretName_secret
 
 securityContext:
   runAsUser: 1000
@@ -73,6 +74,8 @@ sts:
 
 
 properties:
+  instanceName: SOMENAME
+  UseK8sSecrets: false
   # https://nifi.apache.org/docs/nifi-docs/html/administration-guide.html#nifi_sensitive_props_key
   sensitiveKey: changeMechangeMe # Must have at least 12 characters
   # NiFi assumes conf/nifi.properties is persistent but this helm chart
@@ -94,6 +97,7 @@ properties:
   httpsPort: 8443
   webProxyHost: # <clusterIP>:<NodePort> (If Nifi service is NodePort or LoadBalancer)
   clusterPort: 6007
+  clusterProtocolIsSecure: true
   zkClientEnsembleTraker: false # https://issues.apache.org/jira/browse/NIFI-10481
   clusterNodeConnectionTimeout: '5 sec'
   clusterNodeReadTimeout: '5 sec'
@@ -101,10 +105,14 @@ properties:
   zookeeperSessionTimeout: '3 secs'
   archiveMaxRetentionPeriod: "3 days"
   archiveMaxUsagePercentage: "85%"
+  archiveEnabled: true
+  archiveAlwaysSync: true
+  archiveMaxAppendableSize: "50 KB"
   provenanceStorage: "8 GB"
   provenanceMaxStorageTime: "10 days"
   flowArchiveMaxTime: "30 days"
   flowArchiveMaxStorage: "500 MB"
+  # kerberosKrb5Path: /opt/nifi/data/custom/security/krb5.conf
   siteToSite:
     port: 10000
   # use properties.safetyValve to pass explicit 'key: value' pairs that overwrite other configuration
@@ -113,6 +121,9 @@ properties:
     nifi.web.http.network.interface.default: eth0
     # listen to loopback interface so "kubectl port-forward ..." works
     nifi.web.http.network.interface.lo: lo
+
+
+
 
   ## Include aditional processors
   # customLibPath: "/opt/configuration_resources/custom_lib"
@@ -126,8 +137,8 @@ auth:
   # If set while LDAP is enabled, this value will be used for the initial admin and not the ldap bind dn / admin
   admin: CN=admin, OU=NIFI
   SSL:
-    keystorePasswd: changeMe
-    truststorePasswd: changeMe
+    keystorePasswd: changeMe_secret
+    truststorePasswd: changeMe_secret
 
   # Automaticaly disabled if OIDC or LDAP enabled
   singleUser:
@@ -143,13 +154,21 @@ auth:
     searchBase: #CN=Users,DC=ldap,DC=example,DC=be
     admin: #cn=admin,dc=ldap,dc=example,dc=be
     pass: #ChangeMe
+    disableEndpointIdentification: false
+    userSearchScope: ONE_LEVEL # Search scope for searching users (ONE_LEVEL, OBJECT, or SUBTREE). Required if searching users.
     searchFilter: (objectClass=*)
-    userIdentityAttribute: cn
+    userIdentityAttribute: sAMAccountName
     authStrategy: SIMPLE # How the connection to the LDAP server is authenticated. Possible values are ANONYMOUS, SIMPLE, LDAPS, or START_TLS.
     identityStrategy: USE_DN
     authExpiration: 12 hours
-    userSearchScope: ONE_LEVEL # Search scope for searching users (ONE_LEVEL, OBJECT, or SUBTREE). Required if searching users.
+    groupSearchBase: #CN=Users,DC=ldap,DC=example,DC=be   
     groupSearchScope: ONE_LEVEL # Search scope for searching groups (ONE_LEVEL, OBJECT, or SUBTREE). Required if searching groups.
+    groupSearchFilter: (objectClass=*)
+    groupUserIdentityAttribute: sAMAccountName
+    groupNameAttribute: sAMAccountName
+    groupMemberAttribute: member
+    groupMemberAttributeReferencedUser: distinguishedName   
+
 
   oidc:
     enabled: false
@@ -173,7 +192,7 @@ openldap:
     LDAP_TLS: "true"
     LDAP_TLS_ENFORCE: "false"
     LDAP_REMOVE_CONFIG_AFTER_SETUP: "false"
-  adminPassword: #ChengeMe
+  adminPassword: #ChangeMe
   configPassword: #ChangeMe
   customLdifFiles:
     1-default-users.ldif: |-
@@ -230,7 +249,15 @@ containerPorts: []
 ingress:
   enabled: false
   # className: nginx
-  annotations: {}
+  annotations:
+    kubernetes.io/ingress.class: nginx
+    nginx.ingress.kubernetes.io/affinity: cookie
+    nginx.ingress.kubernetes.io/affinity-mode: persistent
+    nginx.ingress.kubernetes.io/backend-protocol: HTTPS
+    nginx.ingress.kubernetes.io/proxy-body-size: 100m
+    nginx.ingress.kubernetes.io/session-cookie-expires: "172800"
+    nginx.ingress.kubernetes.io/session-cookie-max-age: "172800"
+    nginx.ingress.kubernetes.io/session-cookie-name: route
   tls: []
   hosts: []
   path: /
@@ -273,25 +300,35 @@ persistence:
     size: 30Gi
 
   ## Storage Capacities for persistent volumes (these are ignored if using one volume with subPath)
+  sshStorage:
+    size: 100Mi
+    DisallowSubPath: false    
   configStorage:
     size: 100Mi
+    DisallowSubPath: false 
   authconfStorage:
     size: 100Mi
+    DisallowSubPath: false 
   # Storage capacity for the 'data' directory, which is used to hold things such as the flow.xml.gz, configuration, state, etc.
   dataStorage:
     size: 1Gi
+    DisallowSubPath: false 
   # Storage capacity for the FlowFile repository
   flowfileRepoStorage:
     size: 10Gi
+    DisallowSubPath: false 
   # Storage capacity for the Content repository
   contentRepoStorage:
     size: 10Gi
+    DisallowSubPath: false 
   # Storage capacity for the Provenance repository. When changing this, one should also change the properties.provenanceStorage value above, also.
   provenanceRepoStorage:
     size: 10Gi
+    DisallowSubPath: false 
   # Storage capacity for nifi logs
   logStorage:
     size: 5Gi
+    DisallowSubPath: false 
 
 ## Configure resource requests and limits
 ## ref: http://kubernetes.io/docs/user-guide/compute-resources/
@@ -394,8 +431,8 @@ ca:
 certManager:
   enabled: false
   clusterDomain: cluster.local
-  keystorePasswd: changeme
-  truststorePasswd: changeme
+  keystorePasswd: changeme_secret
+  truststorePasswd: changeme_secret
   replaceDefaultTrustStore: false
   additionalDnsNames:
     - localhost

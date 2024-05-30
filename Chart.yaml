@@ -1,8 +1,8 @@
 ---
 apiVersion: v2
 name: nifi
-version: 1.2.1
-appVersion: 1.23.2
+version: 1.3.2
+appVersion: 2.0.2-M3
 description: Apache NiFi is a software project from the Apache Software Foundation designed to automate the flow of data between software systems.
 keywords:
   - nifi
@@ -13,18 +13,8 @@ icon: https://svn.apache.org/repos/asf/nifi/site/trunk/images/niFi-logo-horizont
 source:
   - https://github.com/cetic/helm-nifi
 maintainers:
-  - name: banzo
-    email: sebastien.dupont@cetic.be
-    url: https://github.com/banzo
-  - name: AyadiAmen
-    email: amen.ayadi@cetic.be
-    url: https://github.com/AyadiAmen
-  - name: alexnuttinck
-    email: alexandre.nuttinck@cetic.be
-    url: https://github.com/alexnuttinck
-  - name: zakaria2905
-    email: zakaria.hajja@cetic.be
-    url: https://github.com/zakaria2905
+  - name: mohammad.yahiya
+    email: mohammad.yahiya@galaxyweblinks.in
 dependencies:
   - name: zookeeper
     version: 9.2.7

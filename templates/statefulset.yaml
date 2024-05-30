@@ -33,6 +33,10 @@ spec:
 {{ toYaml .Values.extraLabels | indent 8 }}
 {{- end }}
     spec:
+{{- if .Values.schedulerName }}
+      schedulerName: {{ .Values.schedulerName }}
+{{- end }}
+
 {{- if .Values.sts.useHostNetwork }}
       hostNetwork: {{ .Values.sts.useHostNetwork }}
       dnsPolicy: ClusterFirstWithHostNet
@@ -141,6 +145,25 @@ spec:
 {{- if .Values.auth.ldap.enabled }}
           cat "${NIFI_HOME}/conf/authorizers.temp" > "${NIFI_HOME}/conf/authorizers.xml"
           cat "${NIFI_HOME}/conf/login-identity-providers-ldap.xml" > "${NIFI_HOME}/conf/login-identity-providers.xml"
+          {{- if .Values.properties.UseK8sSecrets }}
+          xmlstarlet ed --inplace --update "//authorizers/userGroupProvider/property[@name='TLS - Keystore Password']" -v ${NIFI_TLS_KEYSTORE_PASSWORD} "${NIFI_HOME}/conf/authorizers.xml"
+          xmlstarlet ed --inplace --update "//authorizers/userGroupProvider/property[@name='TLS - Truststore Password']" -v ${NIFI_TLS_TRUSTSTORE_PASSWORD} "${NIFI_HOME}/conf/authorizers.xml"
+          xmlstarlet ed --inplace --update "//authorizers/userGroupProvider/property[@name='Manager DN']" -v "${LDAP_MANAGER_DN}" "${NIFI_HOME}/conf/authorizers.xml"
+          xmlstarlet ed --inplace --update "//authorizers/userGroupProvider/property[@name='Manager Password']" -v ${LDAP_MANAGER_PASSWORD} "${NIFI_HOME}/conf/authorizers.xml"
+          xmlstarlet ed --inplace --update "//authorizers/userGroupProvider/property[@name='Initial User Identity admin']" -v ${INITIAL_ADMIN_IDENTITY} "${NIFI_HOME}/conf/authorizers.xml"
+          xmlstarlet ed --inplace --update "//authorizers/accessPolicyProvider/property[@name='Initial Admin Identity']" -v ${INITIAL_ADMIN_IDENTITY} "${NIFI_HOME}/conf/authorizers.xml"
+          xmlstarlet ed --inplace --update "//loginIdentityProviders/provider/property[@name='TLS - Keystore Password']" -v ${NIFI_TLS_KEYSTORE_PASSWORD} "${NIFI_HOME}/conf/login-identity-providers.xml"
+          xmlstarlet ed --inplace --update "//loginIdentityProviders/provider/property[@name='TLS - Truststore Password']" -v ${NIFI_TLS_TRUSTSTORE_PASSWORD} "${NIFI_HOME}/conf/login-identity-providers.xml"
+          xmlstarlet ed --inplace --update "//loginIdentityProviders/provider/property[@name='Manager DN']" -v "${LDAP_MANAGER_DN}" "${NIFI_HOME}/conf/login-identity-providers.xml"
+          xmlstarlet ed --inplace --update "//loginIdentityProviders/provider/property[@name='Manager Password']" -v ${LDAP_MANAGER_PASSWORD} "${NIFI_HOME}/conf/login-identity-providers.xml"
+          {{- if semverCompare "< 2.0.0-0" .Values.image.tag }}
+          xmlstarlet ed --inplace --update "//authorizers/authorizer/property[@name='Initial Admin Identity']" -v "${INITIAL_ADMIN_IDENTITY}" "${NIFI_HOME}/conf/authorizers.xml"
+          {{- end }}
+          prop_replace nifi.sensitive.props.key ${NIFI_SENSITIVE_PROPS_KEY}
+          prop_replace nifi.security.keystorePasswd ${NIFI_TLS_KEYSTORE_PASSWORD}
+          prop_replace nifi.security.keyPasswd ${NIFI_TLS_KEYSTORE_PASSWORD}
+          prop_replace nifi.security.truststorePasswd ${NIFI_TLS_TRUSTSTORE_PASSWORD}
+          {{- end }}
 {{- else if .Values.auth.oidc.enabled }}
           prop_replace nifi.security.user.login.identity.provider ''
           prop_replace nifi.security.user.authorizer managed-authorizer
@@ -183,19 +206,15 @@ spec:
           bin/nifi.sh set-single-user-credentials {{ .Values.auth.singleUser.username }} {{ .Values.auth.singleUser.password }}
 {{- end }}
 
-{{ if .Values.customFlow }}
-          gzip < {{ .Values.customFlow }} > /opt/nifi/data/flow.xml.gz
-{{ else }}
-          if ! test -f /opt/nifi/data/flow.xml.gz && test -f /opt/nifi/data/flow.xml; then
-            gzip /opt/nifi/data/flow.xml
-          fi
-{{ end }}
-
           prop_replace nifi.ui.banner.text $(hostname -s)
           prop_replace nifi.remote.input.host ${FQDN}
           prop_replace nifi.cluster.node.address ${FQDN}
           prop_replace nifi.zookeeper.connect.string ${NIFI_ZOOKEEPER_CONNECT_STRING}
           prop_replace nifi.web.http.host ${FQDN}
+
+{{- if .Values.properties.kerberosKrb5Path }}
+          prop_replace nifi.kerberos.krb5.file {{ .Values.properties.kerberosKrb5Path }}
+{{- end }}
 
 {{- if .Values.properties.webProxyHost }}
           # Update nifi.properties for web ui proxy hostname
@@ -223,10 +242,16 @@ spec:
 
           prop_replace nifi.security.keystore "${NIFI_HOME}/tls/keystore.jks"
           prop_replace nifi.security.keystoreType JKS
-          prop_replace nifi.security.keystorePasswd "{{ .Values.certManager.keystorePasswd }}"
+          {{- if .Values.properties.UseK8sSecrets }} 
+          prop_replace nifi.security.keystorePasswd "${NIFI_TLS_KEYSTORE_PASSWORD}"
+          prop_replace nifi.security.truststorePasswd "${NIFI_TLS_TRUSTSTORE_PASSWORD}"
+          {{- else }}
+          prop_replace nifi.security.keystorePasswd "{{ .Values.certManager.keystorePasswd }}"  
+          prop_replace nifi.security.truststorePasswd "{{ .Values.certManager.truststorePasswd }}"
+          {{- end }}
           prop_replace nifi.security.truststore "${NIFI_HOME}/tls/truststore.jks"
           prop_replace nifi.security.truststoreType JKS
-          prop_replace nifi.security.truststorePasswd "{{ .Values.certManager.truststorePasswd }}"
+
 
           prop_replace nifi.web.https.host "$(hostname).{{ template "apache-nifi.fullname" $ }}-headless.{{ $.Release.Namespace }}.svc.{{ $.Values.certManager.clusterDomain }}"
           prop_replace nifi.cluster.node.address "$(hostname).{{ template "apache-nifi.fullname" $ }}-headless.{{ $.Release.Namespace }}.svc.{{ $.Values.certManager.clusterDomain }}"
@@ -254,13 +279,7 @@ spec:
 
           if [ ! -r "${NIFI_HOME}/conf/nifi-cert.pem" ]
           then
-            /opt/nifi/nifi-toolkit-current/bin/tls-toolkit.sh standalone \
-              -n '{{.Release.Name}}-nifi-0.{{.Release.Name}}-nifi-headless.{{.Release.Namespace}}.svc.cluster.local' \
-              -C '{{.Values.auth.admin}}' \
-              -o "${NIFI_HOME}/conf/" \
-              -P {{.Values.auth.SSL.truststorePasswd}} \
-              -S {{.Values.auth.SSL.keystorePasswd}} \
-              --nifiPropertiesFile /opt/nifi/nifi-current/conf/nifi.properties
+             ls /opt/nifi/nifi-toolkit-current/bin/
           fi
 
 {{- /* if .Values.certManager.enabled */}}{{ end }}
@@ -279,7 +298,11 @@ spec:
 {{- /* if .Values.properties.sensitiveKeyPrior */}}{{ else }}
             prop_replace nifi.sensitive.props.key ""
 {{- /* if .Values.properties.sensitiveKeyPrior */}}{{ end }}
+            {{- if .Values.properties.UseK8sSecrets }}
+            bin/nifi.sh set-sensitive-properties-key ${NIFI_SENSITIVE_PROPS_KEY}
+            {{- else }}
             bin/nifi.sh set-sensitive-properties-key {{ .Values.properties.sensitiveKey | quote }}
+            {{- end }}
             touch {{ .Values.properties.sensitiveKeySetFile | quote }}
           fi
 {{- /* if .Values.properties.sensitiveKeySetFile */}}{{ end }}
@@ -455,49 +478,56 @@ spec:
             port: {{ .Values.properties.httpsPort }}
         volumeMounts:
           - mountPath: /opt/nifi/nifi-current/logs
-            {{- if and .Values.persistence.enabled .Values.persistence.subPath.enabled }}
+            {{- if and .Values.persistence.enabled .Values.persistence.subPath.enabled (not .Values.persistence.logStorage.DisallowSubPath) }}
             name: {{ .Values.persistence.subPath.name }}
             subPath: logs
             {{- else }}
             name: "logs"
             {{- end }}
           - mountPath: /opt/nifi/data
-            {{- if and .Values.persistence.enabled .Values.persistence.subPath.enabled }}
+            {{- if and .Values.persistence.enabled .Values.persistence.subPath.enabled (not .Values.persistence.dataStorage.DisallowSubPath) }}
             name: {{ .Values.persistence.subPath.name }}
             subPath: data
             {{- else }}
             name: "data"
             {{- end }}
           - mountPath: /opt/nifi/nifi-current/auth-conf/
-            {{- if and .Values.persistence.enabled .Values.persistence.subPath.enabled }}
+            {{- if and .Values.persistence.enabled .Values.persistence.subPath.enabled (not .Values.persistence.authconfStorage.DisallowSubPath) }}
             name: {{ .Values.persistence.subPath.name }}
             subPath: auth-conf
             {{- else }}
             name: "auth-conf"
             {{- end }}
           - mountPath: /opt/nifi/nifi-current/config-data
-            {{- if and .Values.persistence.enabled .Values.persistence.subPath.enabled }}
+            {{- if and .Values.persistence.enabled .Values.persistence.subPath.enabled (not .Values.persistence.configStorage.DisallowSubPath) }}
             name: {{ .Values.persistence.subPath.name }}
             subPath: config-data
             {{- else }}
             name: "config-data"
             {{- end }}
+          - mountPath: /home/nifi/.ssh/
+            {{- if and .Values.persistence.enabled .Values.persistence.subPath.enabled (not .Values.persistence.sshStorage.DisallowSubPath) }}
+            name: {{ .Values.persistence.subPath.name }}
+            subPath: ssh-data
+            {{- else }}
+            name: "ssh-data"
+            {{- end }}
           - mountPath: /opt/nifi/flowfile_repository
-            {{- if and .Values.persistence.enabled .Values.persistence.subPath.enabled }}
+            {{- if and .Values.persistence.enabled .Values.persistence.subPath.enabled (not .Values.persistence.flowfileRepoStorage.DisallowSubPath) }}
             name: {{ .Values.persistence.subPath.name }}
             subPath: flowfile-repository
             {{- else }}
             name: "flowfile-repository"
             {{- end }}
           - mountPath: /opt/nifi/content_repository
-            {{- if and .Values.persistence.enabled .Values.persistence.subPath.enabled }}
+            {{- if and .Values.persistence.enabled .Values.persistence.subPath.enabled (not .Values.persistence.contentRepoStorage.DisallowSubPath) }}
             name: {{ .Values.persistence.subPath.name }}
             subPath: content-repository
             {{- else }}
             name: "content-repository"
             {{- end }}
           - mountPath: /opt/nifi/provenance_repository
-            {{- if and .Values.persistence.enabled .Values.persistence.subPath.enabled }}
+            {{- if and .Values.persistence.enabled .Values.persistence.subPath.enabled (not .Values.persistence.provenanceRepoStorage.DisallowSubPath) }}
             name: {{ .Values.persistence.subPath.name }}
             subPath: provenance-repository
             {{- else }}
@@ -622,6 +652,10 @@ spec:
       - name: cert-manager
         imagePullPolicy: {{ .Values.image.pullPolicy | quote }}
         image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+{{- if .Values.envFrom }}
+        envFrom:
+{{ toYaml .Values.envFrom | indent 8 }}
+{{- end }}
         command:
         - bash
         - -ce
@@ -655,6 +689,7 @@ spec:
           rm -f "${NIFI_HOME}/tls/truststore-new.jks"
           for ca in "${NIFI_HOME}"/tls/*/ca.crt
           do
+            echo ${NIFI_TLS_TRUSTSTORE_PASSWORD}
             ALIAS=$(echo $ca | awk -F "/" '{print $(NF-1) }' -)
             keytool -import \
                     -noprompt \
@@ -663,10 +698,18 @@ spec:
                     -storetype JKS \
                     -file $ca \
                     -keystore "${NIFI_HOME}/tls/truststore-new.jks" \
+                    {{- if .Values.properties.UseK8sSecrets }}
+                    -storepass:env "NIFI_TLS_TRUSTSTORE_PASSWORD"
+                    {{- else }}
                     -storepass "{{ .Values.certManager.truststorePasswd }}"
+                    {{- end }}
           done
           keytool -list -keystore "${NIFI_HOME}/tls/truststore-new.jks" \
+                        {{- if .Values.properties.UseK8sSecrets }}
+                        -storepass:env "NIFI_TLS_TRUSTSTORE_PASSWORD"
+                        {{- else }}
                         -storepass "{{ .Values.certManager.truststorePasswd }}"
+                        {{- end }}
           mv "${NIFI_HOME}/tls/truststore-new.jks" "${NIFI_HOME}/tls/truststore.jks"
 
           while :
@@ -680,23 +723,37 @@ spec:
                                      -inkey   "/tmp/tls.key" \
                                      -name    "${NODENAME}" \
                                      -out     "/tmp/tls.p12" \
+                                     {{- if .Values.properties.UseK8sSecrets }}
+                                     -passout "pass:${NIFI_TLS_KEYSTORE_PASSWORD}"
+                                     {{- else }}
                                      -passout "pass:{{ .Values.certManager.keystorePasswd }}"
+                                     {{- end }}
               rm -f "${NIFI_HOME}/tls/keystore-new.jks"
               keytool -importkeystore \
                       -noprompt \
+                      -v \
                       -destkeystore "${NIFI_HOME}/tls/keystore-new.jks" \
                       -srckeystore "/tmp/tls.p12" \
                       -srcstoretype PKCS12 \
                       -deststoretype JKS \
+                      {{- if .Values.properties.UseK8sSecrets }}
+                      -srcstorepass:env "NIFI_TLS_KEYSTORE_PASSWORD" \
+                      -deststorepass:env "NIFI_TLS_KEYSTORE_PASSWORD"
+                      {{- else }}
                       -srcstorepass "{{ .Values.certManager.keystorePasswd }}" \
                       -deststorepass "{{ .Values.certManager.keystorePasswd }}"
+                      {{- end }}
               mv  "${NIFI_HOME}/tls/keystore-new.jks" "${NIFI_HOME}/tls/keystore.jks"
               mv /tmp/tls.crt /tmp/tls.crt.old
             fi
 
             ls -l "${NIFI_HOME}/tls/keystore.jks"
             keytool -list -keystore "${NIFI_HOME}/tls/keystore.jks" \
+                          {{- if .Values.properties.UseK8sSecrets }}
+                          -storepass:env "NIFI_TLS_KEYSTORE_PASSWORD"
+                          {{- else }}
                           -storepass "{{ .Values.certManager.keystorePasswd }}"
+                          {{- end }}
 
             echo Starting to sleep for {{ .Values.certManager.refreshSeconds }} seconds at $(date)
             sleep {{ .Values.certManager.refreshSeconds }}
@@ -823,6 +880,8 @@ spec:
 {{- if not .Values.persistence.enabled }}
       - name: config-data
         emptyDir: {}
+      - name: ssh-data
+        emptyDir: {}        
       - name: auth-conf
         emptyDir: {}
       - name: data
@@ -839,8 +898,10 @@ spec:
 {{- if .Values.extraVolumes }}
 {{ toYaml .Values.extraVolumes | indent 6 }}
 {{- end }}
-{{- if and .Values.persistence.enabled .Values.persistence.subPath.enabled }}
+{{- if and .Values.persistence.enabled }}
   volumeClaimTemplates:
+{{- end }}
+{{- if and .Values.persistence.enabled .Values.persistence.subPath.enabled }}
     - metadata:
         name: {{ .Values.persistence.subPath.name }}
       spec:
@@ -853,8 +914,8 @@ spec:
           requests:
             storage: {{ .Values.persistence.subPath.size }}
 {{- end }}
-{{- if and .Values.persistence.enabled (not .Values.persistence.subPath.enabled) }}
-  volumeClaimTemplates:
+
+{{- if and .Values.persistence.enabled (or (and .Values.persistence.subPath.enabled .Values.persistence.logStorage.DisallowSubPath) (not .Values.persistence.subPath.enabled)) }}
     - metadata:
         name: logs
       spec:
@@ -862,18 +923,32 @@ spec:
         {{- range .Values.persistence.accessModes }}
           - {{ . | quote }}
         {{- end }}
-        storageClassName: {{ .Values.persistence.storageClass | quote }}
+        storageClassName: {{ .Values.persistence.logStorage.storageClass | default .Values.persistence.storageClass | quote }}
         resources:
           requests:
             storage: {{ .Values.persistence.logStorage.size }}
+{{- end }}
+{{- if and .Values.persistence.enabled (or (and .Values.persistence.subPath.enabled .Values.persistence.sshStorage.DisallowSubPath) (not .Values.persistence.subPath.enabled)) }}
+    - metadata:
+        name: "ssh-data"
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        storageClassName: {{ .Values.persistence.sshStorage.storageClass | default .Values.persistence.storageClass | quote }}
+        resources:
+          requests:
+            storage: {{ .Values.persistence.sshStorage.size }}
+{{- end }}
+{{- if and .Values.persistence.enabled (or (and .Values.persistence.subPath.enabled .Values.persistence.configStorage.DisallowSubPath) (not .Values.persistence.subPath.enabled)) }}
     - metadata:
         name: "config-data"
       spec:
         accessModes: ["ReadWriteOnce"]
-        storageClassName: {{ .Values.persistence.storageClass | quote }}
+        storageClassName: {{ .Values.persistence.configStorage.storageClass | default .Values.persistence.storageClass | quote }}
         resources:
           requests:
             storage: {{ .Values.persistence.configStorage.size }}
+{{- end }}
+{{- if and .Values.persistence.enabled (or (and .Values.persistence.subPath.enabled .Values.persistence.dataStorage.DisallowSubPath) (not .Values.persistence.subPath.enabled)) }}
     - metadata:
         name: data
       spec:
@@ -881,10 +956,12 @@ spec:
         {{- range .Values.persistence.accessModes }}
           - {{ . | quote }}
         {{- end }}
-        storageClassName: {{ .Values.persistence.storageClass | quote }}
+        storageClassName: {{ .Values.persistence.dataStorage.storageClass | default .Values.persistence.storageClass | quote }}
         resources:
           requests:
             storage: {{ .Values.persistence.dataStorage.size }}
+{{- end }}
+{{- if and .Values.persistence.enabled (or (and .Values.persistence.subPath.enabled .Values.persistence.flowfileRepoStorage.DisallowSubPath) (not .Values.persistence.subPath.enabled)) }}
     - metadata:
         name: flowfile-repository
       spec:
@@ -892,10 +969,12 @@ spec:
         {{- range .Values.persistence.accessModes }}
           - {{ . | quote }}
         {{- end }}
-        storageClassName: {{ .Values.persistence.storageClass | quote }}
+        storageClassName: {{ .Values.persistence.flowfileRepoStorage.storageClass | default .Values.persistence.storageClass | quote }}
         resources:
           requests:
             storage: {{ .Values.persistence.flowfileRepoStorage.size }}
+{{- end }}
+{{- if and .Values.persistence.enabled (or (and .Values.persistence.subPath.enabled .Values.persistence.contentRepoStorage.DisallowSubPath) (not .Values.persistence.subPath.enabled)) }}
     - metadata:
         name: content-repository
       spec:
@@ -903,10 +982,12 @@ spec:
         {{- range .Values.persistence.accessModes }}
           - {{ . | quote }}
         {{- end }}
-        storageClassName: {{ .Values.persistence.storageClass | quote }}
+        storageClassName: {{ .Values.persistence.contentRepoStorage.storageClass | default .Values.persistence.storageClass | quote }} 
         resources:
           requests:
             storage: {{ .Values.persistence.contentRepoStorage.size }}
+{{- end }}
+{{- if and .Values.persistence.enabled (or (and .Values.persistence.subPath.enabled .Values.persistence.provenanceRepoStorage.DisallowSubPath) (not .Values.persistence.subPath.enabled)) }}
     - metadata:
         name: provenance-repository
       spec:
@@ -914,10 +995,12 @@ spec:
         {{- range .Values.persistence.accessModes }}
           - {{ . | quote }}
         {{- end }}
-        storageClassName: {{ .Values.persistence.storageClass | quote }}
+        storageClassName: {{ .Values.persistence.provenanceRepoStorage.storageClass | default .Values.persistence.storageClass | quote }}
         resources:
           requests:
             storage: {{ .Values.persistence.provenanceRepoStorage.size }}
+{{- end }}
+{{- if and .Values.persistence.enabled (or (and .Values.persistence.subPath.enabled .Values.persistence.authconfStorage.DisallowSubPath) (not .Values.persistence.subPath.enabled)) }}
     - metadata:
         name: auth-conf
       spec:
@@ -925,7 +1008,7 @@ spec:
         {{- range .Values.persistence.accessModes }}
           - {{ . | quote }}
         {{- end }}
-        storageClassName: {{ .Values.persistence.storageClass | quote }}
+        storageClassName: {{ .Values.persistence.authconfStorage.storageClass | default .Values.persistence.storageClass | quote }} 
         resources:
           requests:
             storage: {{ .Values.persistence.authconfStorage.size }}
