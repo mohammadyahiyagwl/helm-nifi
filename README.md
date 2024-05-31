@@ -13,21 +13,25 @@ If you are interested in maintaining a fork of this project, please chime in in 
 
 ## Introduction
 
-This [Helm](https://helm.sh/) chart installs [Apache NiFi](https://nifi.apache.org/) 1.23.2 in a [Kubernetes](https://kubernetes.io/) cluster.
+This [Helm](https://helm.sh/) chart installs [Apache NiFi](https://nifi.apache.org/) 2.0.0-M2 in a [Kubernetes](https://kubernetes.io/) cluster.
 
 ## Prerequisites
 
-- Kubernetes cluster 1.10+
+- Kubernetes cluster 1.16+
 - Helm 3.0.0+
 - [Persistent Volumes (PV)](https://kubernetes.io/docs/concepts/storage/persistent-volumes/) provisioner support in the underlying infrastructure.
 
 ## Installation
 
-### Add Helm repository
 
 ```bash
-helm repo add cetic https://cetic.github.io/helm-charts
+git clone https://github.com/mohammadyahiyagwl/helm-nifi.git
+cd helm-nifi
+helm repo add bitnami https://charts.bitnami.com/bitnami
+helm repo add dysnix https://dysnix.github.io/charts/
 helm repo update
+helm dep up
+helm install nifi .
 ```
 
 ### Configure the chart
@@ -79,7 +83,7 @@ If you plan to use Grafana for the visualization of the metrics data [the follow
 Install the nifi helm chart with a release name `my-release`:
 
 ```bash
-helm install my-release cetic/nifi
+helm install my-release .
 ```
 
 ### Install from local clone
@@ -324,12 +328,7 @@ Initially inspired from https://github.com/YolandaMDavis/apache-nifi.
 
 TLS work/inspiration from https://github.com/sushilkm/nifi-chart.git.
 
-## Contributing
-
-Feel free to contribute by making a [pull request](https://github.com/cetic/helm-nifi/pull/new/master).
-
-Please read the official [Helm Contribution Guide](https://github.com/helm/charts/blob/master/CONTRIBUTING.md) from Helm for more information on how you can contribute to this Chart.
-
+Version upgrade from https://github.com/agturley/helm-nifi.git
 ## License
 
 [Apache License 2.0](/LICENSE)
