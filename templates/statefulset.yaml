@@ -120,6 +120,9 @@ spec:
       - name: server
         imagePullPolicy: {{ .Values.image.pullPolicy | quote }}
         image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+        envFrom:
+          - secretRef:
+              name: {{ .Chart.Name }}-secret
         command:
         - bash
         - -ce

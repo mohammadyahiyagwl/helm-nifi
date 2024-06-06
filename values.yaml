@@ -21,6 +21,9 @@ securityContext:
   runAsUser: 1000
   fsGroup: 1000
 
+customsecrets:
+  galaxy: secret-value
+
 ## @param useHostNetwork - boolean - optional
 ## Bind ports on the hostNetwork. Useful for CNI networking where hostPort might
 ## not be supported. The ports need to be available on all hosts. It can be
